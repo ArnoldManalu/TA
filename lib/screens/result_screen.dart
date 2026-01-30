@@ -2,6 +2,9 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
 
 import '../theme/app_theme.dart';
 import '../widgets/app_buttons.dart';
@@ -37,8 +40,7 @@ class ResultScreen extends StatelessWidget {
     final riskColor = AppColors.riskColors[status] ??
         AppColors.riskColors[normalizedRisk] ??
         AppColors.textSecondary;
-    final riskPosition =
-        _riskValue(status); // Use status to align with bar labels
+    final riskPosition = _riskValue(status);
 
     return Scaffold(
         backgroundColor: bg,
@@ -182,9 +184,22 @@ class ResultScreen extends StatelessWidget {
                         'Penting: ini alat bantu skrining, bukan pengganti konsultasi dokter.',
                   ),
                   const SizedBox(height: 18),
-                  AccentOutlineButton(
-                    onPressed: () => Navigator.pop(context),
-                    label: 'Kembali',
+                  Row(
+                    children: [
+                      Expanded(
+                        child: AccentOutlineButton(
+                          onPressed: () => Navigator.pop(context),
+                          label: 'Kembali',
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: AccentButton(
+                          onPressed: () => _exportAsPdf(context),
+                          label: 'Simpan PDF',
+                        ),
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 14),
                   SizedBox(height: MediaQuery.of(context).padding.bottom),
@@ -207,18 +222,17 @@ class ResultScreen extends StatelessWidget {
   String _statusLabel(String prediction) {
     final lower = prediction.toLowerCase().trim();
 
-    // Prefer exact matches to avoid substring conflicts (e.g. "immature" contains "mature").
+    // Prefer exact matches to avoid substring conflicts
     if (lower == 'normal') return 'NORMAL';
     if (lower == 'immature') return 'IMMATURE';
     if (lower == 'mature') return 'MATURE';
 
-    // Fallback to word-boundary checks for phrases like "stage: immature".
-    bool hasWord(String word) => RegExp('\\b' + word + '\\b').hasMatch(lower);
+    // Fallback to word-boundary checks
+    bool hasWord(String word) => RegExp(r'\b' + word + r'\b').hasMatch(lower);
     if (hasWord('normal')) return 'NORMAL';
     if (hasWord('immature')) return 'IMMATURE';
     if (hasWord('mature')) return 'MATURE';
 
-    // Default to uppercasing the provided prediction.
     return prediction.toUpperCase();
   }
 
@@ -226,18 +240,113 @@ class ResultScreen extends StatelessWidget {
     switch (status) {
       case 'RENDAH':
       case 'NORMAL':
-        return 0.15; // Align with 'Normal' Text
+        return 0.15;
       case 'SEDANG':
       case 'MODERATE':
       case 'MILD':
       case 'IMMATURE':
-        return 0.50; // Align with 'Immature' Text
+        return 0.50;
       case 'TINGGI':
       case 'SEVERE':
       case 'MATURE':
-        return 0.85; // Align with 'Mature' Text
+        return 0.85;
       default:
         return 0.50;
+    }
+  }
+
+  Future<void> _exportAsPdf(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final doc = pw.Document();
+
+      pw.MemoryImage? eyeImage;
+      if (imagePath != null && imagePath!.isNotEmpty) {
+        try {
+          final bytes = await File(imagePath!).readAsBytes();
+          eyeImage = pw.MemoryImage(bytes);
+        } catch (_) {
+          eyeImage = null;
+        }
+      }
+
+      doc.addPage(
+        pw.Page(
+          build: (pw.Context ctx) {
+            return pw.Container(
+              padding: const pw.EdgeInsets.all(24),
+              decoration: pw.BoxDecoration(
+                border: pw.Border.all(
+                  color: PdfColor.fromInt(AppColors.primary.value),
+                ),
+                borderRadius: pw.BorderRadius.circular(12),
+              ),
+              child: pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  pw.Text('Laporan Deteksi Katarak',
+                      style: pw.TextStyle(
+                          fontSize: 20, fontWeight: pw.FontWeight.bold)),
+                  pw.SizedBox(height: 12),
+                  pw.Text('Status: $prediction'),
+                  pw.Text('Risiko: $riskLevel'),
+                  pw.Text('Confidence: ${confidence.toStringAsFixed(1)}%'),
+                  pw.SizedBox(height: 12),
+                  pw.Text('Ringkasan:',
+                      style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
+                  pw.Text(description, maxLines: 8),
+                  if (allPredictions != null && allPredictions!.isNotEmpty) ...[
+                    pw.SizedBox(height: 10),
+                    pw.Text('Distribusi probabilitas:',
+                        style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
+                    pw.SizedBox(height: 6),
+                    ...allPredictions!.map(
+                      (p) {
+                        final lbl = p['label']?.toString() ?? 'Unknown';
+                        final conf =
+                            (p['confidence'] as num?)?.toDouble() ?? 0.0;
+                        return pw.Text('- $lbl: ${conf.toStringAsFixed(2)}%');
+                      },
+                    ),
+                  ],
+                  if (eyeImage != null) ...[
+                    pw.SizedBox(height: 16),
+                    pw.Text('Gambar input:',
+                        style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
+                    pw.SizedBox(height: 8),
+                    pw.ClipRRect(
+                      horizontalRadius: 8,
+                      verticalRadius: 8,
+                      child: pw.Container(
+                        height: 200,
+                        decoration: pw.BoxDecoration(
+                          borderRadius: pw.BorderRadius.circular(8),
+                          border: pw.Border.all(
+                            color: PdfColor.fromInt(AppColors.primary.value),
+                          ),
+                        ),
+                        child: pw.Image(eyeImage, fit: pw.BoxFit.cover),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            );
+          },
+        ),
+      );
+
+      await Printing.sharePdf(
+        bytes: await doc.save(),
+        filename: 'hasil_katarak.pdf',
+      );
+    } catch (e) {
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('Gagal menyimpan PDF: $e'),
+          backgroundColor: AppColors.danger,
+        ),
+      );
     }
   }
 }
@@ -278,7 +387,7 @@ class _RiskBar extends StatelessWidget {
                   child: Container(
                     decoration: BoxDecoration(
                       borderRadius: BorderRadius.circular(12),
-                      color: color, // Solid color for clarity
+                      color: color,
                     ),
                   ),
                 ),

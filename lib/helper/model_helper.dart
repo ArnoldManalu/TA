@@ -573,6 +573,24 @@ Map<String, dynamic> _analyzeQuality(img.Image image) {
   };
 }
 
+// Isolate function khusus resize tanpa normalisasi
+Future<Uint8List> _resizeOnlyOnIsolate(Uint8List bytes) async {
+  final image = img.decodeImage(bytes);
+  if (image == null) {
+    throw Exception('Failed to decode image for resizing');
+  }
+
+  // Resize ke ukuran input model (224x224)
+  final resized = img.copyResize(
+    image,
+    width: ModelHelper.inputSize,
+    height: ModelHelper.inputSize,
+  );
+
+  // Return sebagai JPG bytes
+  return Uint8List.fromList(img.encodeJpg(resized));
+}
+
 double _luma(img.Pixel pixel) {
   return 0.299 * pixel.r + 0.587 * pixel.g + 0.114 * pixel.b;
 }
